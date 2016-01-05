@@ -77,19 +77,20 @@ class ProcessorConfiguration {
   }
 
   public function get($host, $key, $noValueException = TRUE, $defaultValue = NULL) {
-    if (in_array($host, $this->perHost)) {
-      $hostConfiguration = $this->perHost[$host];
-      if (in_array($key, $hostConfiguration)) {
+    // perHost ?
+    if (array_key_exists($host, $this->perHost)) {
+      $hostConfiguration = &$this->perHost[$host];
+      if (array_key_exists($key, $hostConfiguration)) {
 	return $hostConfiguration[$key];
       }
     }
 
-    //
+    // generic ?
     if (array_key_exists($key, $this->generic)) {
       return $this->generic[$key];
     }
 
-    //
+    // exception ?
     if ($noValueException) {
       throw new Exception("ProcessorConfiguration : No value for key \"$key\" and host \"$host\"" );
     }
@@ -190,19 +191,19 @@ class HtmlDocumentPruneProcessor extends HtmlDocumentProcessor {
     $xpath = $processorState->htmlDocument->xpath;
 
     // remove useless tags
-    foreach ($this->configuration->get($processorState, "JUNK_TAGS") as $tag) {
+    foreach ($this->getConfiguration($processorState, "JUNK_TAGS") as $tag) {
       self::removeJunkTag($doc, $tag);
     }
   
     // remove useless xpath
-    foreach($this->configuration->get($processorState, "JUNK_XPATH") as $xpathSpec) {
+    foreach($this->getConfiguration($processorState, "JUNK_XPATH") as $xpathSpec) {
       foreach ($xpath->query($xpathSpec) as $element) {
 	$element->parentNode->removeChild($element);
       }	
     }
     
     // remove useless attributes
-    foreach ($this->configuration->get($processorState, "JUNK_ATTRS") as $attr) {
+    foreach ($this->getConfiguration($processorState, "JUNK_ATTRS") as $attr) {
       self::removeJunkAttr($doc, $attr);
     }
     
@@ -473,7 +474,8 @@ class HtmlDocumentMetadataProcessor extends HtmlDocumentProcessor {
 	    preg_match("/[0-9]+;URL\=(.*)/", $meta->getAttribute('content'), $redirect_urls);
 	  }
 	  if (count($redirect_urls) == 2) {
-	    return htmlpage_getmeta($redirect_urls[1]);
+	    // FIXME : return  htmlpage_getmeta($redirect_urls[1]);
+	    return;
 	  }
 	  // END HACK
 	}
@@ -494,7 +496,7 @@ class HtmlDocumentMetadataProcessor extends HtmlDocumentProcessor {
       }
     }
     
-    if (fuzzyCompare($data["title"], $data["description"], TRUE)) {
+    if (isset($data["description"]) && fuzzyCompare($data["title"], $data["description"], TRUE)) {
       unset($data["description"]);
     }
     
@@ -507,10 +509,14 @@ class HtmlDocumentMetadataProcessor extends HtmlDocumentProcessor {
  */
 class HtmlDocumentContentProcessor extends HtmlDocumentProcessor {
 
+  private static $FORBIDDEN_HOSTS_CONTENT = [ 'twitter.com', 'www.twitter.com', 
+					      'www.reddit.com', '8tracks.com', 'www.bizjournals.com',
+					      'www.amazon.com'];
+
   private static $XPATH = Array(
-		      "//article",
 		      "//*[@itemprop='reviewBody']",
 		      "//*[contains(concat(' ', normalize-space(@itemprop), ' '), ' articleBody ')]",
+		      "//article",
 		      "//main[@role='main']",
 		      "//div[@role='main']",
 		      "//div[contains(concat(' ', normalize-space(@class), ' '), ' story-body ')]",
@@ -532,9 +538,15 @@ class HtmlDocumentContentProcessor extends HtmlDocumentProcessor {
 
   protected function setDefaultConfiguration() {
     $this->configuration->set("CONTENT_XPATH", self::$XPATH);
+    foreach (self::$FORBIDDEN_HOSTS_CONTENT as $host) {
+      $this->configuration->set("DISALLOW_CONTENT", TRUE, $host);
+    }
   }
   
   public function process(&$processorState) {
+    if ($this->getConfiguration($processorState, "DISALLOW_CONTENT", FALSE, FALSE)) {
+      return FALSE;
+    }
     list($node, $xpathSpec) = $this->getContentNode($processorState);
 
     if ($node !== NULL) {
@@ -612,6 +624,9 @@ class HtmlDocumentAllProcessor extends HtmlDocumentProcessor {
 	  $this->processors['FixURL']->process($processorState);
 	  $this->processors['Prune']->process($processorState);
 	  $this->processors['PruneEmpty']->process($processorState);
+
+	  // HACK ?
+	  $processorState->data['content'] = $processorState->htmlDocument->getContent();
 	}
       }
     }
@@ -623,10 +638,6 @@ class HtmlDocumentAllProcessor extends HtmlDocumentProcessor {
   Create a ProcessorState for a URL using CURL
  */
 class URLProcessorStateFactory {
-
-  private static $FORBIDDEN_HOSTS_CONTENT = [ 'twitter.com', 'www.twitter.com', 
-					      'www.reddit.com', '8tracks.com', 'www.bizjournals.com',
-					      'www.amazon.com'];
   
   public static function create($url) {
     $data = [ 'url' => $url ];
@@ -732,8 +743,6 @@ function htmluseful($url) {
 
   $processorState = URLProcessorStateFactory::create($url);
   $processor->process($processorState);
-
-  $processorState->data['content'] = $processorState->htmlDocument->getContent();
 
   return $processorState->data;
 }
