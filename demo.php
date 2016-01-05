@@ -6,14 +6,26 @@ if (isset($_GET['url'])) {
 ?><html>
 <head>
   <meta charset="UTF-8" >
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="normalize.css">
   <title>htmluseful demo</title>
 </head>
-  <form action="demo.php">
-    <input type="text" name="url" length="200" >
-    <input type="submit" value="Submit" >
-  </form>
+  <div style="padding: 10px;">
+    <form action="demo.php">
+      <input type="text" name="url" length="2048" style="width:90%" value="<? echo $_GET["url"] ?>" >
+      <input type="submit" value="Submit" >
+    </form>
+  </div>
 <?php 
   if (isset($useful)) { 
+    echo "<hr>\n";
+    echo "<table>\n";
+    foreach($useful as $key => $value) {
+      if ($key !== 'content' && $key !== 'description') {
+	echo "<tr><td>" . $key ."</td><td>" . $value . "</td></tr>\n";
+      }
+    }
+    echo "</table>\n";
     echo "<hr>\n";
     echo "<h1>" . $useful['title'] . "</h1>\n";
     $content_exists = array_key_exists('content', $useful);

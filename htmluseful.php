@@ -2,7 +2,6 @@
 
 function normalizeString($str) {
   $str = strtolower(trim(html_entity_decode($str)));
-  // $str = preg_split('/\s+/', $str, NULL, PREG_SPLIT_NO_EMPTY);
   return $str;
 }
 
@@ -259,10 +258,8 @@ class HtmlDocumentPruneProcessor extends HtmlDocumentProcessor {
 	   || (strpos($href, "//www.viadeo.com/shareit/") !== FALSE)
 	   ) {
 	$p = $element->parentNode;
-	//      $old = $p->removeChild($element);
+	// FIXME : ugly hack
 	$element->setAttribute("data-remove", "data-remove");
-	//      echo $element->ownerDocument->saveHTML($p);
-	// var_dump($old);
       }
     }
     return $node;
@@ -731,7 +728,6 @@ class URLProcessorStateFactory {
 
 function htmluseful($url) {
   $processorConfiguration = new ProcessorConfiguration();
-  $processorConfiguration->set("key", "value");
   $processor = new HtmlDocumentAllProcessor($processorConfiguration);
 
   $processorState = URLProcessorStateFactory::create($url);
