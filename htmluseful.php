@@ -36,8 +36,11 @@ class HtmlDocument {
 
   function HtmlDocument($content, $document) {
     if (isset($content) && ! isset($document)) {
+      libxml_use_internal_errors(true);
       $this->document = new DOMDocument();
-      @$this->document->loadHTML($content, LIBXML_COMPACT | LIBXML_HTML_NOIMPLIED);
+      $this->document->preserveWhiteSpace = false;
+      $this->document->loadHTML($content, LIBXML_NOBLANKS | LIBXML_COMPACT | LIBXML_NOERROR);
+      libxml_use_internal_errors(false);
     } else if (! isset($content) && isset($document) ) {
       $this->document = $document;
     } else {
@@ -47,6 +50,7 @@ class HtmlDocument {
   }
 
   function getContent() {
+    $this->document->formatOutput = true;
     return $this->document->saveHTML();
   }
   
@@ -167,9 +171,9 @@ class HtmlDocumentPruneProcessor extends HtmlDocumentProcessor {
 				    "noscript", "select", "option", "object", "applet", "basefont",
 				    "bgsound", "blink", "canvas", "command", "menu", "datalist",
 				    "embed", "frame", "frameset", "keygen", "label", "marquee", "link",
-				    "header", "footer", "nav", "aside" );
+				    "header", "footer", "nav", "aside", "head" );
   
-  private static $JUNK_ATTRS = Array("style", "class", "onclick", "onmouseover", "onload", "onerror", "align", "border", "margin");
+  private static $JUNK_ATTRS = Array("style", "onclick", "onmouseover", "onload", "onerror", "align", "border", "margin");
 
   private static $JUNK_XPATH = Array(
 				     '//comment()',
@@ -177,7 +181,23 @@ class HtmlDocumentPruneProcessor extends HtmlDocumentProcessor {
 				     "//*[@aria-label='tools']",
 				     "//*[@aria-hidden='true']",
 				     "//*[contains(@style,'display:none') or contains(@style,'visibility:hidden')]",
-				     "//*[contains(@style,'display: none') or contains(@style,'visibility: hidden')]"
+				     "//*[contains(@style,'display: none') or contains(@style,'visibility: hidden')]",
+				     "//*[contains(concat(' ',normalize-space(@class),' '),' entry-utility ')]",
+				     "//*[contains(concat(' ',normalize-space(@class),' '),' entry-footer ')]",
+				     "//*[contains(concat(' ',normalize-space(@class),' '),' entry-meta ')]",
+				     // See https://www.readability.com/publishers/guidelines/#view-plainGuidelines
+				     // and http://blog.instapaper.com/post/730281947
+				     "//*[contains(concat(' ',normalize-space(@class),' '),' entry-unrelated ')]",
+				     "//*[contains(concat(' ',normalize-space(@class),' '),' instapaper_ignore ')]",
+				     "//div[@id='nav-below']",
+				     "//*[contains(concat(' ',normalize-space(@class),' '),' comment ')]",
+				     "//*[contains(concat(' ',normalize-space(@class),' '),' nav ')]",
+				     "//*[contains(concat(' ',normalize-space(@class),' '),' navigation ')]",
+				     "//*[contains(@class,'forum')]",
+				     "//*[contains(@class,'auth')]",
+				     "//*[@id='comment']",
+				     "//*[@id='comments']"
+				     // "//div[@role='menubar' or @role='role='menu' or @role='navigaton' or @role='banner' or @role='search' or @role='complementary' or @role='contentinfo']"
 				     );
 
   protected function setDefaultConfiguration() {
@@ -197,11 +217,16 @@ class HtmlDocumentPruneProcessor extends HtmlDocumentProcessor {
   
     // remove useless xpath
     foreach($this->getConfiguration($processorState, "JUNK_XPATH") as $xpathSpec) {
-      foreach ($xpath->query($xpathSpec) as $element) {
-	$element->parentNode->removeChild($element);
-      }	
+      $elementList = $xpath->query($xpathSpec);
+      if ($elementList !== FALSE) {
+	foreach ($elementList as $element) {
+	  $element->parentNode->removeChild($element);
+	}
+      } else {
+	echo "!! error with $xpathSpec !!";
+      }
     }
-    
+
     // remove useless attributes
     foreach ($this->getConfiguration($processorState, "JUNK_ATTRS") as $attr) {
       self::removeJunkAttr($doc, $attr);
@@ -216,8 +241,6 @@ class HtmlDocumentPruneProcessor extends HtmlDocumentProcessor {
     // remove h1/h2... that contains the title document
     self::removeDuplicateTitle($doc, 'h1', $processorState->data["title"]);
     self::removeDuplicateTitle($doc, 'h2', $processorState->data["title"]);
-    self::removeDuplicateTitle($doc, 'h3', $processorState->data["title"]);
-    self::removeDuplicateTitle($doc, 'h4', $processorState->data["title"]);
   }
   
   function removeJunkTag($RootNode, $TagName) {
@@ -249,7 +272,7 @@ class HtmlDocumentPruneProcessor extends HtmlDocumentProcessor {
     $elements = $node->getElementsByTagName('a');
     foreach($elements as $element) {
       $href = $element->getAttribute('href');
-      if ( (strpos($href, "//www.facebook.com/sharer/") !== FALSE)
+      if (    (strpos($href, "//www.facebook.com/share") !== FALSE)
 	   || (strpos($href, "//twitter.com/intent/tweet") !== FALSE)
 	   || (strpos($href, "//twitter.com/home?status=") !== FALSE)
 	   || (strpos($href, "//www.linkedin.com/shareArticle") !== FALSE)
@@ -291,13 +314,43 @@ class HtmlDocumentPruneProcessor extends HtmlDocumentProcessor {
  */
 class HtmlDocumentPruneEmptyProcessor extends HtmlDocumentProcessor {
 
+  private function addScore($node, $score) {
+    $doc = $node->ownerDocument;
+    while ($node !== $doc) {
+      $currentScore = $node->getAttribute("data-score");
+      if ($currentScore === "") {
+	$currentScore = 0;
+      } else {
+	$currentScore = intval($currentScore);
+      }
+      if ($node->nodeName !== 'a') {
+	$currentScore += $score;
+      }
+      $node->setAttribute("data-score", $currentScore);
+
+      $node = $node->parentNode;
+    }
+  }
+
   public function process(&$processorState) {
+    // remove empty text node
+    $xpath = $processorState->htmlDocument->xpath;
+    foreach( $xpath->query('//text()') as $node ) {
+      $text = $node->nodeValue;
+      if (strlen(trim(preg_replace('~[[:cntrl:]]~', '', $text)))===0) {
+	$node->parentNode->removeChild($node);
+      } else {
+	// $this->addScore($node->parentNode, strlen(trim($node->nodeValue)));
+      }
+    }
+     
+    // remove empty node (FIXME)
     $doc = $processorState->htmlDocument->document;
     $oneMore = TRUE;
     while ($oneMore) {
       $count = 0;
       $elements = $doc->getElementsByTagName('*');
-      
+
       foreach($elements as $element) {
 	if ( $element->tagName !== 'br' AND $element->tagName !== 'img' AND  $element->tagName !== 'path' AND ( ! $element->hasChildNodes() )) {
 	  $element->parentNode->removeChild($element);
@@ -493,6 +546,7 @@ class HtmlDocumentMetadataProcessor extends HtmlDocumentProcessor {
 	  $data[$data_name] = $meta->getAttribute('content');
 	  $data_priorities[$data_name] = $data_priority;
 	}
+	// add all og: data
       }
     }
     
@@ -522,6 +576,8 @@ class HtmlDocumentContentProcessor extends HtmlDocumentProcessor {
 		      "//div[contains(concat(' ', normalize-space(@class), ' '), ' story-body ')]",
 		      "//article[@id='story']",
 		      "//div[@id='story']",
+		      "//*[contains(concat(' ',normalize-space(@class),' '),' instapaper_body ')]",
+		      "//*[contains(concat(' ',normalize-space(@class),' '),' hentry ')]",
 		      // WordPress
 		      "//div[contains(concat(' ', normalize-space(@class), ' '), ' entry-content ')]",
 		      // SPIP
@@ -529,7 +585,7 @@ class HtmlDocumentContentProcessor extends HtmlDocumentProcessor {
 		      "//*[contains(concat(' ', normalize-space(@class), ' '), ' post-content ')]",
 		      "//div[contains(concat(' ', normalize-space(@class), ' '), ' article-content ')]",
 		      "//div[contains(concat(' ', normalize-space(@class), ' '), ' article-text ')]",
-		      "//*[contains(concat(' ', normalize-space(@class), ' '), ' content ')]",
+		      // "//*[contains(concat(' ', normalize-space(@class), ' '), ' content ')]",
 		      "//div[@id='single']",
 		      "//div[@id='content']",
 		      // http://www.agoravox.tv/
@@ -616,16 +672,24 @@ class HtmlDocumentAllProcessor extends HtmlDocumentProcessor {
     if ($processorState->htmlDocument != NULL) {
       if (strpos($processorState->data['mimetype'], self::$HTMLPAGE_MIMETYPE) === 0 
 	  && ! $this->getConfiguration($processorState, "DISABLED", FALSE, FALSE)) {
+	// FIXME ??
 	$this->processors['BaseURL']->process($processorState);
 	$this->processors['Metadata']->process($processorState);
+	$this->processors['FixURL']->process($processorState);
+	$this->processors['Youtube']->process($processorState);
+
+	$this->processors['Prune']->process($processorState);
+	$this->processors['PruneEmpty']->process($processorState);
+
+	// echo $processorState->htmlDocument->getContent();
+	// throw new Exception('');
+
 	// TODO : if no image then add the (twitter|og):image at the top
 	if ($this->processors['Content']->process($processorState)) {
-	  $this->processors['Youtube']->process($processorState);
-	  $this->processors['FixURL']->process($processorState);
-	  $this->processors['Prune']->process($processorState);
-	  $this->processors['PruneEmpty']->process($processorState);
-
 	  // HACK ?
+	  $processorState->data['content'] = $processorState->htmlDocument->getContent();
+	} else {
+	  // ??
 	  $processorState->data['content'] = $processorState->htmlDocument->getContent();
 	}
       }
@@ -638,6 +702,17 @@ class HtmlDocumentAllProcessor extends HtmlDocumentProcessor {
   Create a ProcessorState for a URL using CURL
  */
 class URLProcessorStateFactory {
+
+  // raw HTML filters
+  protected static $pre_filters = array(
+				 '!<script[^>]*>(.*?)</script>!is' => '', // remove obvious scripts
+				 '!<style[^>]*>(.*?)</style>!is' => '', // remove obvious styles
+				 '!</?span[^>]*>!is' => '', // remove spans as we redefine styles and they're probably special-styled
+				 '!<font[^>]*>\s*\[AD\]\s*</font>!is' => '', // HACK: firewall-filtered content
+				 '!(<br[^>]*>[ \r\n\s]*){2,}!i' => '</p><p>', // HACK: replace linebreaks plus br's with p's
+				 //'!</?noscript>!is' => '', // replace noscripts
+				 '!<(/?)font[^>]*>!is' => '<\\1span>', // replace fonts to spans
+				 );
   
   public static function create($url) {
     $data = [ 'url' => $url ];
@@ -655,8 +730,14 @@ class URLProcessorStateFactory {
     }
     
     if ($content !== FALSE && $httpcode >= 200 && $httpcode < 300) {
+      // decode
       self::decodeContent($content, '');
-      
+
+      // prefilter
+      foreach (self::$pre_filters as $search => $replace) {
+	$content = preg_replace($search, $replace, $content);
+      }
+
       return new ProcessorState(new HtmlDocument($content, NULL), $data);
     }
     
