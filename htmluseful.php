@@ -5,6 +5,30 @@ function normalizeString($str) {
   return $str;
 }
 
+function levenshtein_php($str1, $str2){
+  if( $str1 === $str2) return 0;
+  $length1 = mb_strlen( $str1, 'UTF-8');
+  $length2 = mb_strlen( $str2, 'UTF-8');
+  if( $length1 < $length2) return levenshtein_php($str2, $str1);
+  if( $length1 == 0 ) return $length2;
+  $prevRow = range( 0, $length2);
+  $currentRow = array();
+  for ( $i = 0; $i < $length1; $i++ ) {
+    $currentRow=array();
+    $currentRow[0] = $i + 1;
+    $c1 = mb_substr( $str1, $i, 1, 'UTF-8') ;
+    for ( $j = 0; $j < $length2; $j++ ) {
+      $c2 = mb_substr( $str2, $j, 1, 'UTF-8' );
+      $insertions = $prevRow[$j+1] + 1;
+      $deletions = $currentRow[$j] + 1;
+      $substitutions = $prevRow[$j] + (($c1 != $c2)?1:0);
+      $currentRow[] = min($insertions, $deletions, $substitutions);
+    }
+    $prevRow = $currentRow;
+  }
+  return $prevRow[$length2];
+}
+
 function fuzzyCompare($str1, $str2, $normalize = FALSE) {
   if ($str1 === $str2) {
     return TRUE;
@@ -23,7 +47,7 @@ function fuzzyCompare($str1, $str2, $normalize = FALSE) {
     return TRUE;
   }
   if (strlen($str1) < 250 && strlen($str2)) {
-    $l = levenshtein($str1, $str2);
+    $l = levenshtein_php($str1, $str2);
     return $l < max(round(strlen($str1)/30), 3);
   } else {
     return FALSE;
@@ -192,12 +216,15 @@ class HtmlDocumentPruneProcessor extends HtmlDocumentProcessor {
 				     "//div[@id='nav-below']",
 				     "//*[contains(concat(' ',normalize-space(@class),' '),' comment ')]",
 				     "//*[contains(concat(' ',normalize-space(@class),' '),' nav ')]",
-				     "//*[contains(concat(' ',normalize-space(@class),' '),' navigation ')]",
+				     "//*[contains(@class, 'navigation')]",
 				     "//*[contains(@class,'forum')]",
 				     "//*[contains(@class,'auth')]",
+				     "//*[contains(@class,'membership')]",
+				     "//*[contains(@class,'share')]",
 				     "//*[@id='comment']",
-				     "//*[@id='comments']"
-				     // "//div[@role='menubar' or @role='role='menu' or @role='navigaton' or @role='banner' or @role='search' or @role='complementary' or @role='contentinfo']"
+				     "//*[@id='aside']",
+				     "//*[@id='comments']",
+				     "//div[@role='menubar' or @role='menu' or @role='navigaton' or @role='banner' or @role='search' or @role='complementary' or @role='contentinfo']"
 				     );
 
   protected function setDefaultConfiguration() {
@@ -222,9 +249,7 @@ class HtmlDocumentPruneProcessor extends HtmlDocumentProcessor {
 	foreach ($elementList as $element) {
 	  $element->parentNode->removeChild($element);
 	}
-      } else {
-	echo "!! error with $xpathSpec !!";
-      }
+      } // else error
     }
 
     // remove useless attributes
@@ -239,8 +264,8 @@ class HtmlDocumentPruneProcessor extends HtmlDocumentProcessor {
     }
 
     // remove h1/h2... that contains the title document
-    self::removeDuplicateTitle($doc, 'h1', $processorState->data["title"]);
-    self::removeDuplicateTitle($doc, 'h2', $processorState->data["title"]);
+    self::removeDuplicateTitle($doc, 'h1', $processorState->data['title']);
+    self::removeDuplicateTitle($doc, 'h2', $processorState->data['title']);
   }
   
   function removeJunkTag($RootNode, $TagName) {
@@ -273,13 +298,15 @@ class HtmlDocumentPruneProcessor extends HtmlDocumentProcessor {
     foreach($elements as $element) {
       $href = $element->getAttribute('href');
       if (    (strpos($href, "//www.facebook.com/share") !== FALSE)
+	   || (strpos($href, "//www.facebook.com/dialog/") !== FALSE)
 	   || (strpos($href, "//twitter.com/intent/tweet") !== FALSE)
+	   || (strpos($href, "//twitter.com/intent/retweet") !== FALSE)
 	   || (strpos($href, "//twitter.com/home?status=") !== FALSE)
+	   || (strpos($href, "//plus.google.com/share?") !== FALSE)
 	   || (strpos($href, "//www.linkedin.com/shareArticle") !== FALSE)
 	   || (strpos($href, "//www.pinterest.com/pin/create/") !== FALSE)
-	   || (strpos($href, "whatsapp://send") === 0)
-	   || (strpos($href, "//plus.google.com/share?") !== FALSE)
 	   || (strpos($href, "//www.viadeo.com/shareit/") !== FALSE)
+	   || (strpos($href, "whatsapp://send") === 0)
 	   ) {
 	$p = $element->parentNode;
 	// FIXME : ugly hack
@@ -520,18 +547,6 @@ class HtmlDocumentMetadataProcessor extends HtmlDocumentProcessor {
 	$meta_name = $meta->getAttribute('rel');
       }
       if ($meta_name === "") {
-	if ($meta->getAttribute('http-equiv') === 'refresh') {
-	  // HACK : http-equiv='refresh' --> follow redirection
-	  preg_match("/[0-9]+;URL\=[\"\'](.*)[\"\']/", $meta->getAttribute('content'), $redirect_urls);
-	  if (count($redirect_urls) < 1) {
-	    preg_match("/[0-9]+;URL\=(.*)/", $meta->getAttribute('content'), $redirect_urls);
-	  }
-	  if (count($redirect_urls) == 2) {
-	    // FIXME : return  htmlpage_getmeta($redirect_urls[1]);
-	    return;
-	  }
-	  // END HACK
-	}
 	if (strtolower($meta->getAttribute('http-equiv')) === 'content-type') {
 	  $data['mimetype'] = $meta->getAttribute('content');
 	}
@@ -681,9 +696,6 @@ class HtmlDocumentAllProcessor extends HtmlDocumentProcessor {
 	$this->processors['Prune']->process($processorState);
 	$this->processors['PruneEmpty']->process($processorState);
 
-	// echo $processorState->htmlDocument->getContent();
-	// throw new Exception('');
-
 	// TODO : if no image then add the (twitter|og):image at the top
 	if ($this->processors['Content']->process($processorState)) {
 	  // HACK ?
@@ -712,12 +724,14 @@ class URLProcessorStateFactory {
 				 '!(<br[^>]*>[ \r\n\s]*){2,}!i' => '</p><p>', // HACK: replace linebreaks plus br's with p's
 				 //'!</?noscript>!is' => '', // replace noscripts
 				 '!<(/?)font[^>]*>!is' => '<\\1span>', // replace fonts to spans
+				 //				 '`[\x00-\x08\x0b-\x0c\x0e-\x1f]`', ''
 				 );
-  
+
   public static function create($url) {
+    $url = self::getCleanUrl($url);
     $data = [ 'url' => $url ];
     
-    list($httpcode, $url, $content, $mimetype) = self::fetch($url);
+    list($httpcode, $url, $content, $mimetype) = self::fetchFollowRedirect($url);
 
     // FIXME : content_type
     $data['mimetype'] = $mimetype;
@@ -743,9 +757,30 @@ class URLProcessorStateFactory {
     
     return new ProcessorState(NULL, $data);
   }
+
+  private static function getCleanUrl($url) {
+    $url = preg_replace('/((\?)?(&(amp;)?)?utm_(.*?)\=[^&]+)|(#(.*?)\=[^&]+)/', '', urldecode($url));
+    return $url;
+  }
+
+  private static function fetchFollowRedirect($url) {
+    $follow = TRUE;
+    while ($follow) {
+      $follow = FALSE;
+      list($httpcode, $url, $content, $mimetype) = self::fetch($url);
+      if ($content !== FALSE && $httpcode >= 200 && $httpcode < 300) {
+	$redirectUrl = self::getMetaRefreshURL($url, $content);
+	if ($redirectUrl) {
+	  $url = $redirectUrl;
+	  $follow = TRUE;
+	}
+      }
+    }
+    return array($httpcode, $url, $content, $mimetype);
+  }
   
   private static function fetch($url) {
-    $ch = curl_init("$url");
+    $ch = curl_init($url);
     
     curl_setopt($ch, CURLOPT_HEADER, 0); 
     curl_setopt($ch, CURLOPT_FOLLOWLOCATION, 1); 
@@ -767,6 +802,24 @@ class URLProcessorStateFactory {
     // $content= html_entity_decode($content);
     
     return array($httpcode, $url, $content, $mimetype);
+  }
+
+  private static function getMetaRefreshURL($url, $html) {
+    if ($html == '') {
+      return false;
+    }
+    // <meta HTTP-EQUIV="REFRESH" content="0; url=http://www.linuxfr.org/">
+    if (!preg_match('!<meta http-equiv=["\']?refresh["\']? content=["\']?[0-9];\s*url=["\']?([^"\'>]+)["\']?!i', $html, $match)) {
+      return false;
+    }
+    $redirect_url = trim($match[1]);
+    if (preg_match('!^https?://!i', $redirect_url)) {
+      // already absolute
+      return $redirect_url;
+    }
+    // absolutize redirect URL
+    // FIXME
+    return false;
   }
 
   private static function decodeContent(&$content, $contentType) {
